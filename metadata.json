@@ -1,0 +1,6 @@
+{
+  "name": "MediaPlayer App",
+  "description": "High-performance offline local media player with advanced indexing, swipe gesture overlays, subtitle syncer, and playback state recovery.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}
