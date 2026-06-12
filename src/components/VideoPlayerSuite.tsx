@@ -22,7 +22,9 @@ import {
   Maximize2,
   Clock,
   RotateCcw,
-  Plus
+  Plus,
+  Tv,
+  Radio
 } from "lucide-react";
 
 export default function VideoPlayerSuite() {
@@ -42,6 +44,12 @@ export default function VideoPlayerSuite() {
     return saved ? parseFloat(saved) : 1.0;
   });
   const [isMuted, setIsMuted] = useState(false);
+  const [activeSubtitleText, setActiveSubtitleText] = useState("");
+
+  // Broadcast Channel for External Source Mirror Casting
+  const broadcastChannelRef = useRef<BroadcastChannel | null>(null);
+  const [castActive, setCastActive] = useState(false);
+  const [showCastModal, setShowCastModal] = useState(false);
 
   // Video Settings
   const [playbackSpeed, setPlaybackSpeed] = useState(1.0);
@@ -50,6 +58,48 @@ export default function VideoPlayerSuite() {
     const saved = localStorage.getItem("mediaplayer_brightness");
     return saved ? parseFloat(saved) : 1.5; // multiplier for brightness filter
   });
+
+  const broadcastState = (syncOverride = {}) => {
+    if (broadcastChannelRef.current && activeVideo) {
+      broadcastChannelRef.current.postMessage({
+        type: "sync_state",
+        videoName: activeVideo.name,
+        videoUrl: activeVideo.url,
+        isPlaying,
+        currentTime: videoRef.current ? videoRef.current.currentTime : currentTime,
+        volume: isMuted ? 0 : volume,
+        playbackSpeed,
+        aspectRatio,
+        brightness,
+        activeSubtitleText,
+        ...syncOverride,
+      });
+    }
+  };
+
+  useEffect(() => {
+    const channel = new BroadcastChannel("mediaplayer_cast_sync");
+    broadcastChannelRef.current = channel;
+
+    const handleMessage = (event: MessageEvent) => {
+      const data = event.data;
+      if (data.type === "ping_receiver") {
+        broadcastState();
+      }
+    };
+
+    channel.addEventListener("message", handleMessage);
+
+    return () => {
+      channel.removeEventListener("message", handleMessage);
+      channel.close();
+    };
+  }, [isPlaying, volume, isMuted, playbackSpeed, aspectRatio, brightness, activeSubtitleText, activeVideo]);
+
+  // Broadcast sync updates on state mutations
+  useEffect(() => {
+    broadcastState();
+  }, [isPlaying, volume, isMuted, playbackSpeed, aspectRatio, brightness, activeSubtitleText, activeVideo]);
 
   // Controls UI fade transitions
   const [showControls, setShowControls] = useState(true);
@@ -80,7 +130,6 @@ export default function VideoPlayerSuite() {
   const [activeSubtitleId, setActiveSubtitleId] = useState("sub-demo-en");
   const [parsedCues, setParsedCues] = useState<SubtitleCue[]>([]);
   const [subtitleOffset, setSubtitleOffset] = useState(0.0); // Offset in seconds
-  const [activeSubtitleText, setActiveSubtitleText] = useState("");
 
   // Track initial playhead restore
   const [restoredPlayhead, setRestoredPlayhead] = useState(false);
@@ -475,6 +524,14 @@ export default function VideoPlayerSuite() {
               if (Math.round(curr) % 5 === 0) {
                 savePlayhead(activeVideo.id, curr);
               }
+              // Send seek syncing signals to any external mirrors
+              if (broadcastChannelRef.current) {
+                broadcastChannelRef.current.postMessage({
+                  type: "seek_sync",
+                  currentTime: curr,
+                  duration: videoRef.current.duration
+                });
+              }
             }
           }}
           onPlay={() => setIsPlaying(true)}
@@ -617,6 +674,14 @@ export default function VideoPlayerSuite() {
                   videoRef.current.currentTime = target;
                 }
                 setCurrentTime(target);
+                // Seek sync update immediately
+                if (broadcastChannelRef.current) {
+                  broadcastChannelRef.current.postMessage({
+                    type: "seek_sync",
+                    currentTime: target,
+                    duration: duration || (videoRef.current ? videoRef.current.duration : 100)
+                  });
+                }
               }}
               className="w-full h-1.5 bg-zinc-800 rounded-full appearance-none cursor-pointer accent-indigo-500 outline-none transition-all group-hover:h-2"
             />
@@ -962,6 +1027,129 @@ export default function VideoPlayerSuite() {
                 )}
               </div>
             )}
+
+            {/* External display projection button */}
+            <div className="relative">
+              <button
+                onClick={() => {
+                  setShowCastModal(!showCastModal);
+                  setShowSettingsDropdown(false);
+                  setShowSubtitleDropdown(false);
+                }}
+                className={`p-2 rounded-lg transition-all relative ${
+                  castActive
+                    ? "text-indigo-400 bg-indigo-950/80 border border-indigo-500/20"
+                    : "text-zinc-400 hover:text-white hover:bg-zinc-900"
+                }`}
+                title="Cast / Project to External Display"
+              >
+                <Tv className="w-4 h-4" />
+                {castActive && (
+                  <span className="absolute top-1 right-1 w-1.5 h-1.5 bg-rose-500 rounded-full animate-ping" />
+                )}
+              </button>
+
+              {showCastModal && (
+                <div className="absolute bottom-full right-0 mb-3 w-72 bg-zinc-950 border border-zinc-800 rounded-xl p-4 shadow-2xl z-50 flex flex-col gap-3.5 text-xs text-left text-zinc-300 animate-in fade-in slide-in-from-bottom-2 duration-200">
+                  <div className="flex justify-between items-center border-b border-zinc-900 pb-2.5">
+                    <span className="font-bold text-white flex items-center gap-1.5">
+                      <Tv className="w-4 h-4 text-indigo-400" />
+                      <span>Project to External Target</span>
+                    </span>
+                    <button
+                      onClick={() => setShowCastModal(false)}
+                      className="text-zinc-500 hover:text-white text-[10px]"
+                    >
+                      Close
+                    </button>
+                  </div>
+
+                  <div className="space-y-3">
+                    {/* Option 1: Open Local Mirror Window */}
+                    <div className="p-3 bg-zinc-900/60 rounded-xl border border-zinc-900 flex flex-col gap-2">
+                      <div className="flex justify-between items-start">
+                        <span className="font-semibold text-[11px] text-white">Dual Screen / Projector</span>
+                        <span className="text-[8px] bg-indigo-900/85 text-indigo-200 px-1.5 py-0.5 rounded uppercase font-mono font-bold">Stable</span>
+                      </div>
+                      <p className="text-[10px] text-zinc-400 leading-relaxed">
+                        Opens an optimized mirroring window. Drag it to your TV, second monitor, or projector, and maximize.
+                      </p>
+                      <button
+                        onClick={() => {
+                          const targetUrl = `${window.location.origin}${window.location.pathname}?mode=receiver`;
+                          const win = window.open(
+                            targetUrl,
+                            "MediaPlayerCastWindow",
+                            "width=1280,height=720,menubar=no,status=no,titlebar=no,toolbar=no"
+                          );
+                          if (win) {
+                            setCastActive(true);
+                            triggerHUD("ratio", "External Screen Activated");
+                            // Sync initial states
+                            setTimeout(() => {
+                              broadcastState({ isPlaying: isPlaying });
+                            }, 1000);
+                          } else {
+                            alert("Pop-up blocker is active! Allow pop-ups to mirror the external screen target.");
+                          }
+                          setShowCastModal(false);
+                        }}
+                        className="w-full py-2 bg-indigo-600 hover:bg-indigo-500 text-white rounded-lg font-bold text-center text-[11px] transition-colors shadow-lg shadow-indigo-650/15 cursor-pointer"
+                      >
+                        Open Mirror Display
+                      </button>
+                    </div>
+
+                    {/* Option 2: Wireless TV Cast */}
+                    <div className="p-3 bg-zinc-900/30 rounded-xl border border-zinc-900/80 flex flex-col gap-2">
+                      <div className="flex justify-between items-start">
+                        <span className="font-semibold text-[11px] text-zinc-200">Smart TV Wireless Cast</span>
+                        {videoRef.current && (videoRef.current as any).remote ? (
+                          <span className="text-[8px] bg-emerald-950/85 text-emerald-300 px-1.5 py-0.5 rounded uppercase font-mono font-bold">Supported</span>
+                        ) : (
+                          <span className="text-[8px] bg-zinc-800/85 text-zinc-400 px-1.5 py-0.5 rounded uppercase font-mono font-bold">In-Browser</span>
+                        )}
+                      </div>
+                      <p className="text-[10px] text-zinc-500 leading-relaxed">
+                        Stream media directly to AirPlay, DLNA, or Google Chromecast compatible devices in your local Network.
+                      </p>
+                      <button
+                        onClick={() => {
+                          const v = videoRef.current;
+                          if (v) {
+                            // Standard Remote Playback prompt
+                            if ((v as any).remote && (v as any).remote.prompt) {
+                              (v as any).remote.prompt()
+                                .then(() => {
+                                  setCastActive(true);
+                                  triggerHUD("ratio", "Wifi Casting Prompted");
+                                })
+                                .catch((err: any) => console.log("Cast cancelled or failed", err));
+                            } else if ((v as any).webkitShowPlaybackTargetPicker) {
+                              // Safari AirPlay standard pickers
+                              (v as any).webkitShowPlaybackTargetPicker();
+                              setCastActive(true);
+                            } else {
+                              // Display detailed browser cast option info
+                              alert("Smart Cast Shortcut: Right click this video player and select 'Cast...' to connect any Chromecast or Google TV instantly!");
+                            }
+                          }
+                          setShowCastModal(false);
+                        }}
+                        className="w-full py-1.5 bg-zinc-800 hover:bg-zinc-700 text-zinc-200 rounded-lg font-semibold text-center text-[10px] transition-colors cursor-pointer"
+                      >
+                        Connect Wireless Cast
+                      </button>
+                    </div>
+                  </div>
+
+                  <div className="flex items-center gap-2 text-[9px] text-zinc-500 font-mono border-t border-zinc-900 pt-2.5">
+                    <Radio className="w-3.5 h-3.5" />
+                    <span>Updates mirror frame rates in real-time</span>
+                  </div>
+                </div>
+              )}
+            </div>
 
             {/* Float Picture-in-Picture Trigger button */}
             <button
