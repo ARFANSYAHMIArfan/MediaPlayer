@@ -3,6 +3,7 @@ import { useMedia } from "../context/MediaContext";
 import { formatDuration } from "../utils/mediaUtils";
 import { AspectRatio, SubtitleTrack } from "../types";
 import { parseSubtitles, DEMO_ENGLISH_VTT, DEMO_SPANISH_VTT, SubtitleCue } from "../utils/subtitleParser";
+import { chromecastManager } from "../utils/chromecastManager";
 import {
   Play,
   Pause,
@@ -50,6 +51,31 @@ export default function VideoPlayerSuite() {
   const broadcastChannelRef = useRef<BroadcastChannel | null>(null);
   const [castActive, setCastActive] = useState(false);
   const [showCastModal, setShowCastModal] = useState(false);
+
+  // Chromecast Integration State
+  const [isChromecastConsented, setIsChromecastConsented] = useState(() => chromecastManager.checkConsent());
+  const [chromeCastState, setChromeCastState] = useState(() => chromecastManager.getCastState());
+  const [chromecastSession, setChromecastSession] = useState<any>(null);
+
+  useEffect(() => {
+    if (isChromecastConsented) {
+      const unsubState = chromecastManager.addStateListener((state) => {
+        setChromeCastState(state);
+      });
+      const unsubSession = chromecastManager.addSessionListener((session) => {
+        setChromecastSession(session);
+        if (session) {
+          setCastActive(true);
+        } else {
+          setCastActive(false);
+        }
+      });
+      return () => {
+        unsubState();
+        unsubSession();
+      };
+    }
+  }, [isChromecastConsented]);
 
   // Video Settings
   const [playbackSpeed, setPlaybackSpeed] = useState(1.0);
@@ -284,6 +310,13 @@ export default function VideoPlayerSuite() {
   };
 
   const togglePlay = () => {
+    if (chromecastSession) {
+      if (isPlaying) {
+        chromecastManager.pause();
+      } else {
+        chromecastManager.play();
+      }
+    }
     if (videoRef.current) {
       if (isPlaying) {
         videoRef.current.pause();
@@ -299,6 +332,10 @@ export default function VideoPlayerSuite() {
   };
 
   const skipTime = (seconds: number) => {
+    if (chromecastSession) {
+      const target = Math.max(0, Math.min(duration || 100, currentTime + seconds));
+      chromecastManager.seek(target);
+    }
     if (videoRef.current) {
       const target = Math.max(0, Math.min(duration, videoRef.current.currentTime + seconds));
       videoRef.current.currentTime = target;
@@ -670,6 +707,9 @@ export default function VideoPlayerSuite() {
               value={currentTime}
               onChange={(e) => {
                 const target = parseFloat(e.target.value);
+                if (chromecastSession) {
+                  chromecastManager.seek(target);
+                }
                 if (videoRef.current) {
                   videoRef.current.currentTime = target;
                 }
@@ -727,7 +767,13 @@ export default function VideoPlayerSuite() {
             {/* Volume control with mute toggle */}
             <div className="flex items-center gap-1.5 group">
               <button
-                onClick={() => setIsMuted(!isMuted)}
+                onClick={() => {
+                  const nextMuted = !isMuted;
+                  setIsMuted(nextMuted);
+                  if (chromecastSession) {
+                    chromecastManager.setVolume(volume, nextMuted);
+                  }
+                }}
                 className="p-1.5 text-zinc-400 hover:text-white hover:bg-zinc-900 rounded-lg transition-colors"
                 title={isMuted ? "Unmute" : "Mute"}
               >
@@ -744,8 +790,12 @@ export default function VideoPlayerSuite() {
                 step={0.05}
                 value={isMuted ? 0 : volume}
                 onChange={(e) => {
-                  setVolume(parseFloat(e.target.value));
+                  const targetVol = parseFloat(e.target.value);
+                  setVolume(targetVol);
                   setIsMuted(false);
+                  if (chromecastSession) {
+                    chromecastManager.setVolume(targetVol, false);
+                  }
                 }}
                 className="w-16 h-1 bg-zinc-850 rounded appearance-none cursor-pointer accent-zinc-200 transition-all group-hover:w-24 border-0"
               />
@@ -1100,47 +1150,125 @@ export default function VideoPlayerSuite() {
                       </button>
                     </div>
 
-                    {/* Option 2: Wireless TV Cast */}
-                    <div className="p-3 bg-zinc-900/30 rounded-xl border border-zinc-900/80 flex flex-col gap-2">
-                      <div className="flex justify-between items-start">
-                        <span className="font-semibold text-[11px] text-zinc-200">Smart TV Wireless Cast</span>
-                        {videoRef.current && (videoRef.current as any).remote ? (
-                          <span className="text-[8px] bg-emerald-950/85 text-emerald-300 px-1.5 py-0.5 rounded uppercase font-mono font-bold">Supported</span>
+                    {/* Option 2: Secure Google Chromecast SDK */}
+                    {!isChromecastConsented ? (
+                      <div className="p-3 bg-indigo-950/25 rounded-xl border border-indigo-905 flex flex-col gap-2">
+                        <div className="flex justify-between items-center">
+                          <span className="font-bold text-[11px] text-indigo-300">Google Chromecast</span>
+                          <span className="text-[8px] bg-amber-955 text-amber-250 px-1.5 py-0.5 rounded uppercase font-mono font-bold">Awaiting Consent</span>
+                        </div>
+                        <p className="text-[10px] text-zinc-400 leading-relaxed">
+                          Securely stream video from this app to a Chromecast or Google TV. This requires dynamic script initialization.
+                        </p>
+                        <ul className="text-[9px] text-zinc-500 font-mono space-y-0.5 leading-normal bg-black/40 p-2 rounded border border-zinc-900">
+                          <li>• Load secure on-demand Google SDK</li>
+                          <li>• Request network scan authorization</li>
+                          <li>• No background trackers or cache logs</li>
+                        </ul>
+                        <button
+                          onClick={() => {
+                            chromecastManager.grantConsent();
+                            setIsChromecastConsented(true);
+                            triggerHUD("ratio", "Chromecast Service Approved!");
+                          }}
+                          className="w-full py-1.5 bg-indigo-600 hover:bg-indigo-500 text-white rounded-lg font-bold text-center text-[10px] transition-colors cursor-pointer"
+                        >
+                          Agree & Activate Chromecast
+                        </button>
+                      </div>
+                    ) : (
+                      <div className="p-3 bg-zinc-900/50 rounded-xl border border-zinc-800 flex flex-col gap-2">
+                        <div className="flex justify-between items-center">
+                          <span className="font-bold text-[11px] text-zinc-200">Chromecast Controller</span>
+                          <button
+                            onClick={() => {
+                              chromecastManager.revokeConsent();
+                              setIsChromecastConsented(false);
+                              setChromeCastState("UNAUTHORIZED");
+                            }}
+                            className="text-[8px] text-zinc-500 hover:text-rose-400 font-mono underline"
+                          >
+                            Revoke
+                          </button>
+                        </div>
+
+                        {/* Status HUD Info block */}
+                        <div className="bg-black/45 p-2 rounded border border-zinc-900 text-[10px] font-mono space-y-1">
+                          <div className="flex justify-between">
+                            <span className="text-zinc-500">Scan Status:</span>
+                            <span className="text-zinc-300 font-bold uppercase">{chromeCastState}</span>
+                          </div>
+                          {chromecastSession && (
+                            <div className="flex justify-between border-t border-zinc-900 pt-1">
+                              <span className="text-indigo-400">TV Monitor:</span>
+                              <span className="text-indigo-300 font-bold truncate max-w-[120px]">
+                                {chromecastSession.getCastDevice()?.friendlyName || "Chromecast Active"}
+                              </span>
+                            </div>
+                          )}
+                        </div>
+
+                        {chromeCastState === "NO_DEVICES_AVAILABLE" && (
+                          <p className="text-[9px] text-zinc-500 leading-relaxed">
+                            No active TV discovered yet. Please ensure your Chromecast is on and connected to the same Wi-Fi.
+                          </p>
+                        )}
+
+                        {chromeCastState === "NOT_CONNECTED" && (
+                          <p className="text-[9px] text-indigo-400 font-semibold leading-relaxed">
+                            ✓ Chromecast compatible targets are available!
+                          </p>
+                        )}
+
+                        {/* Actions Launcher */}
+                        {!chromecastSession ? (
+                          <button
+                            onClick={() => {
+                              chromecastManager.requestSession()
+                                .then(() => {
+                                  triggerHUD("ratio", "Connected to TV!");
+                                  const activeSubTrack = subtitleTracks.find((t) => t.id === activeSubtitleId);
+                                  const subUrl = activeSubTrack && activeSubTrack.url !== "demo-en" && activeSubTrack.url !== "demo-es" && activeSubTrack.url !== "custom" ? activeSubTrack.url : undefined;
+                                  chromecastManager.loadVideo(activeVideo.url, activeVideo.name, subUrl)
+                                    .catch((err) => console.warn(err));
+                                })
+                                .catch((err) => console.log(err));
+                              setShowCastModal(false);
+                            }}
+                            className="w-full py-1.5 bg-indigo-600 hover:bg-indigo-500 text-white rounded-lg font-bold text-center text-[10px] transition-colors cursor-pointer"
+                          >
+                            Select TV & Cast Video
+                          </button>
                         ) : (
-                          <span className="text-[8px] bg-zinc-800/85 text-zinc-400 px-1.5 py-0.5 rounded uppercase font-mono font-bold">In-Browser</span>
+                          <div className="flex gap-2">
+                            <button
+                              onClick={() => {
+                                const activeSubTrack = subtitleTracks.find((t) => t.id === activeSubtitleId);
+                                const subUrl = activeSubTrack && activeSubTrack.url !== "demo-en" && activeSubTrack.url !== "demo-es" && activeSubTrack.url !== "custom" ? activeSubTrack.url : undefined;
+                                chromecastManager.loadVideo(activeVideo.url, activeVideo.name, subUrl)
+                                  .then(() => {
+                                    chromecastManager.seek(currentTime);
+                                    triggerHUD("seek", "Resynced Cast Playhead");
+                                  })
+                                  .catch((err) => console.log(err));
+                              }}
+                              className="flex-1 py-1.5 bg-indigo-905 hover:bg-indigo-900 border border-indigo-700/30 text-indigo-350 font-bold rounded-lg text-center text-[10px] transition-colors cursor-pointer"
+                            >
+                              Sync Timeline
+                            </button>
+                            <button
+                              onClick={() => {
+                                chromecastManager.disconnect();
+                                triggerHUD("ratio", "Cast Disconnected");
+                              }}
+                              className="py-1.5 px-3 bg-red-950/40 hover:bg-red-950 border border-red-900/30 text-rose-400 font-bold rounded-lg text-center text-[10px] transition-colors cursor-pointer"
+                            >
+                              Disconnect
+                            </button>
+                          </div>
                         )}
                       </div>
-                      <p className="text-[10px] text-zinc-500 leading-relaxed">
-                        Stream media directly to AirPlay, DLNA, or Google Chromecast compatible devices in your local Network.
-                      </p>
-                      <button
-                        onClick={() => {
-                          const v = videoRef.current;
-                          if (v) {
-                            // Standard Remote Playback prompt
-                            if ((v as any).remote && (v as any).remote.prompt) {
-                              (v as any).remote.prompt()
-                                .then(() => {
-                                  setCastActive(true);
-                                  triggerHUD("ratio", "Wifi Casting Prompted");
-                                })
-                                .catch((err: any) => console.log("Cast cancelled or failed", err));
-                            } else if ((v as any).webkitShowPlaybackTargetPicker) {
-                              // Safari AirPlay standard pickers
-                              (v as any).webkitShowPlaybackTargetPicker();
-                              setCastActive(true);
-                            } else {
-                              // Display detailed browser cast option info
-                              alert("Smart Cast Shortcut: Right click this video player and select 'Cast...' to connect any Chromecast or Google TV instantly!");
-                            }
-                          }
-                          setShowCastModal(false);
-                        }}
-                        className="w-full py-1.5 bg-zinc-800 hover:bg-zinc-700 text-zinc-200 rounded-lg font-semibold text-center text-[10px] transition-colors cursor-pointer"
-                      >
-                        Connect Wireless Cast
-                      </button>
-                    </div>
+                    )}
                   </div>
 
                   <div className="flex items-center gap-2 text-[9px] text-zinc-500 font-mono border-t border-zinc-900 pt-2.5">
