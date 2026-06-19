@@ -69,10 +69,7 @@ export function MediaProvider({ children }: { children: React.ReactNode }) {
       const saved = localStorage.getItem("mediaplayer_playlists");
       if (saved) return JSON.parse(saved);
     } catch (_) {}
-    return [
-      { id: "favs", name: "Favorites", videoIds: ["sample-sintel"] },
-      { id: "demo", name: "Offline Demos", videoIds: ["sample-bunny", "sample-tears"] }
-    ];
+    return [];
   });
 
   const [playheadPoints, setPlayheadPoints] = useState<{ [id: string]: number }>(() => {
